@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>RestreamScribe</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>RestreamScribe</h1>
+      <p>Summaries and transcripts from Restream webhooks</p>
+    </header>
+    <main>
+      <section class="guide">
+        <details open>
+          <summary><strong>Setup Guide: Connect Restream Webhooks</strong></summary>
+          <div class="card">
+            <p>
+              Point your Restream webhook to this service so recordings are transcribed (Groq Whisper) and summarized (OpenRouter Gemini).
+            </p>
+            <h3>Prerequisites</h3>
+            <ul>
+              <li>Public HTTPS URL to this server (e.g., via a domain or tunneling like ngrok).</li>
+              <li>Environment: <code>GROQ_API_KEY</code>, <code>OPENROUTER_API_KEY</code> set in <code>.env</code>.</li>
+              <li>Optional signing secret: <code>RESTREAM_WEBHOOK_SECRET</code>.</li>
+            </ul>
+            <h3>Webhook Endpoint</h3>
+            <pre><code>POST {YOUR_BASE_URL}/webhook/restream
+Content-Type: application/json
+
+{
+  "media_url": "https://.../your_recording.mp4",
+  "stream_id": "external-id-123",
+  "title": "Your Stream Title",
+  "started_at": "2025-01-01T10:00:00Z",
+  "ended_at": "2025-01-01T11:00:00Z"
+}
+</code></pre>
+            <p>
+              The service also accepts <code>recording_url</code> as an alternative to <code>media_url</code>.
+            </p>
+            <h3>Steps in Restream</h3>
+            <ol>
+              <li>Open your Restream dashboard. Locate Webhooks (often under Settings → Integrations or Developer settings).</li>
+              <li>Create a webhook subscription. Set URL to <code>{YOUR_BASE_URL}/webhook/restream</code>.</li>
+              <li>Select events that include a downloadable recording (e.g., “Recording ready”, “Stream ended”).</li>
+              <li>Set content type to <code>application/json</code>. Include a field with a direct download URL such as <code>recording_url</code> or <code>media_url</code>.</li>
+              <li>If Restream provides a signing secret, enable it and copy the secret into this app’s <code>.env</code> as <code>RESTREAM_WEBHOOK_SECRET=...</code>.</li>
+              <li>Send a test delivery from Restream and verify a <code>200 OK</code> with body <code>accepted</code>.</li>
+            </ol>
+            <h3>Testing Manually</h3>
+            <pre><code>curl -X POST {YOUR_BASE_URL}/webhook/restream \
+  -H "Content-Type: application/json" \
+  -d '{
+    "media_url": "https://example.com/sample.mp3",
+    "stream_id": "demo-1",
+    "title": "Demo Stream"
+  }'
+</code></pre>
+            <h3>Security & Signatures</h3>
+            <p>
+              This app includes a placeholder for verifying a signature header (e.g., <code>X-Restream-Signature</code>) using an HMAC over the raw request body.
+              Once you have Restream’s exact signing algorithm and header name, enable strict verification in <code>app/main.py</code>.
+            </p>
+            <h3>Model Settings</h3>
+            <ul>
+              <li>Transcription: Groq Whisper model <code>whisper-1</code> (configurable).</li>
+              <li>Summary: OpenRouter model via <code>OPENROUTER_MODEL</code> (default <code>google/gemini-2.0-pro</code>). Update to Gemini 2.5 Pro once available in OpenRouter.</li>
+            </ul>
+          </div>
+        </details>
+      </section>
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Title</th>
+            <th>Status</th>
+            <th>Language</th>
+            <th>Created</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for s in streams %}
+          <tr>
+            <td>{{ s.id }}</td>
+            <td>{{ s.title or '-' }}</td>
+            <td>{{ s.status }}</td>
+            <td>{{ s.language or '-' }}</td>
+            <td>{{ s.created_at }}</td>
+            <td>
+              <a href="/streams/{{ s.id }}">View</a>
+              {% if s.transcript %}
+              | <a href="/streams/{{ s.id }}/transcript.txt">Transcript</a>
+              {% endif %}
+              {% if s.summary %}
+              | <a href="/streams/{{ s.id }}/summary.txt">Summary</a>
+              {% endif %}
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="6">No streams yet.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </main>
+    <footer>
+      <p>Updated {{ now }}</p>
+    </footer>
+  </body>
+  </html>
