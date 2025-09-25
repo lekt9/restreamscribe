@@ -1,13 +1,24 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 from datetime import datetime
 from typing import Optional
 
-from fastapi import FastAPI, Depends, BackgroundTasks, Header, HTTPException, Request
+from fastapi import (
+    FastAPI,
+    Depends,
+    BackgroundTasks,
+    Header,
+    HTTPException,
+    Request,
+)
 from fastapi.responses import HTMLResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
+
+from pydantic import ValidationError
 
 from app.config import settings
 from app.db import Base, engine, get_db
@@ -25,41 +36,79 @@ templates = Jinja2Templates(directory="templates")
 
 
 def verify_webhook_signature(
-    request: Request,
+    payload: bytes,
     signature_header: Optional[str],
 ) -> bool:
-    # Placeholder for Restream signature verification; implement if you have spec
-    # e.g., HMAC with shared secret over raw body: X-Restream-Signature
-    if settings.restream_webhook_secret and signature_header:
-        # Add real verification when spec is known
+    secret = settings.restream_webhook_secret
+    if not secret:
         return True
-    return True
+
+    if not signature_header:
+        return False
+
+    digest = hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(digest, signature_header)
 
 
 @app.post("/webhook/restream", response_class=PlainTextResponse)
 async def restream_webhook(
-    payload: RestreamWebhook,
     background: BackgroundTasks,
     request: Request,
     db: Session = Depends(get_db),
     x_restream_signature: Optional[str] = Header(default=None, alias="X-Restream-Signature"),
 ):
-    if not verify_webhook_signature(request, x_restream_signature):
+    raw_body = await request.body()
+
+    if not verify_webhook_signature(raw_body, x_restream_signature):
         raise HTTPException(status_code=401, detail="Invalid signature")
+
+    try:
+        payload = RestreamWebhook.model_validate_json(raw_body)
+    except ValidationError as exc:  # noqa: B904
+        raise HTTPException(status_code=400, detail=f"Invalid payload: {exc}") from exc
+
+    if payload.event and not payload.is_recording_ready_event():
+        return "ignored"
 
     media_url = payload.effective_media_url()
     if not media_url:
-        raise HTTPException(status_code=400, detail="Missing media_url / recording_url in payload")
+        raise HTTPException(
+            status_code=400,
+            detail="Missing media_url / recording_url in payload",
+        )
 
-    stream = Stream(
-        external_id=payload.stream_id,
-        title=payload.title,
-        media_url=media_url,
-        started_at=payload.started_at,
-        ended_at=payload.ended_at,
-        status="pending",
-    )
-    db.add(stream)
+    external_id = payload.resolved_stream_id()
+    title = payload.resolved_title()
+
+    stream_query = db.query(Stream)
+    stream: Optional[Stream] = None
+    if external_id:
+        stream = stream_query.filter(Stream.external_id == external_id).one_or_none()
+    if stream is None:
+        stream = stream_query.filter(Stream.media_url == media_url).one_or_none()
+
+    if stream is None:
+        stream = Stream(
+            external_id=external_id,
+            title=title,
+            media_url=media_url,
+            started_at=payload.started_at,
+            ended_at=payload.ended_at,
+            status="pending",
+        )
+        db.add(stream)
+    else:
+        if external_id and not stream.external_id:
+            stream.external_id = external_id
+        if title and not stream.title:
+            stream.title = title
+        stream.media_url = media_url
+        if payload.started_at:
+            stream.started_at = payload.started_at
+        if payload.ended_at:
+            stream.ended_at = payload.ended_at
+        stream.status = "pending"
+
     db.commit()
     db.refresh(stream)
 
@@ -116,4 +165,7 @@ def download_summary(stream_id: int, db: Session = Depends(get_db)):
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request, db: Session = Depends(get_db)):
     streams = db.query(Stream).order_by(Stream.created_at.desc()).all()
-    return templates.TemplateResponse("index.html", {"request": request, "streams": streams, "now": datetime.utcnow()})
+    return templates.TemplateResponse(
+        "index.html",
+        {"request": request, "streams": streams, "now": datetime.utcnow()},
+    )

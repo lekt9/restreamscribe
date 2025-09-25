@@ -40,41 +40,41 @@ async def process_stream(stream_id: int, media_url: str) -> None:
         db.commit()
         db.refresh(stream)
 
-    try:
-        # 1) Download
-        local_media = await download_media(media_url, settings.media_download_dir)
-
-        # 2) Transcribe (blocking IO — run in thread)
-        transcriber = GroqTranscriber()
-        loop = asyncio.get_running_loop()
-        text, lang = await loop.run_in_executor(None, transcriber.transcribe_file, local_media)
-
-        # Store transcript
-        transcript = Transcript(stream_id=stream.id, text=text)
-        stream.language = lang
-        db.add(transcript)
-        db.add(stream)
-        db.commit()
-        db.refresh(stream)
-
-        # 3) Summarize
-        or_client = OpenRouterClient()
-        summary_text = await or_client.summarize(text, title=stream.title)
-        summary = Summary(stream_id=stream.id, text=summary_text, model=or_client.model)
-        db.add(summary)
-        stream.status = "completed"
-        db.add(stream)
-        db.commit()
-
-    except Exception as e:  # noqa: BLE001
-        # On failure, try to persist error status
         try:
-            stream = db.get(Stream, stream_id)
-            if stream:
-                stream.status = f"failed: {e}"
-                db.add(stream)
-                db.commit()
-        finally:
-            raise
+            # 1) Download
+            local_media = await download_media(media_url, settings.media_download_dir)
+
+            # 2) Transcribe (blocking IO — run in thread)
+            transcriber = GroqTranscriber()
+            loop = asyncio.get_running_loop()
+            text, lang = await loop.run_in_executor(None, transcriber.transcribe_file, local_media)
+
+            # Store transcript
+            transcript = Transcript(stream_id=stream.id, text=text)
+            stream.language = lang
+            db.add(transcript)
+            db.add(stream)
+            db.commit()
+            db.refresh(stream)
+
+            # 3) Summarize
+            or_client = OpenRouterClient()
+            summary_text = await or_client.summarize(text, title=stream.title)
+            summary = Summary(stream_id=stream.id, text=summary_text, model=or_client.model)
+            db.add(summary)
+            stream.status = "completed"
+            db.add(stream)
+            db.commit()
+
+        except Exception as e:  # noqa: BLE001
+            # On failure, try to persist error status
+            try:
+                stream = db.get(Stream, stream_id)
+                if stream:
+                    stream.status = f"failed: {e}"
+                    db.add(stream)
+                    db.commit()
+            finally:
+                raise
     finally:
         db.close()
