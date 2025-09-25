@@ -9,7 +9,9 @@ class Settings(BaseSettings):
     debug: bool = True
 
     # Webhook
-    restream_webhook_secret: str | None = Field(default=None, description="Optional webhook signing secret")
+    restream_webhook_secret: str | None = Field(
+        default=None, description="Optional webhook signing secret"
+    )
 
     # Groq Whisper
     groq_api_key: str | None = None
@@ -33,4 +35,3 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
-
